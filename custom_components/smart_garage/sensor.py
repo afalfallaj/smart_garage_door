@@ -21,6 +21,7 @@ from .const import (
     ATTR_TOGGLE_ENTITY,
     ATTR_OPENING_DURATION,
     STATE_OPENING,
+    STATE_CLOSING,
     STATE_CLOSED,
     STATE_OPEN,
     STATE_UNAVAILABLE,
@@ -93,6 +94,9 @@ class SmartGarageSensor(SensorEntity):
         # Explicitly set entity_id to ensure consistency
         self.entity_id = f"sensor.{DOMAIN}_{entity_id_suffix}_state"
         self._attr_should_poll = False
+        
+        # Track previous state for opening/closing logic
+        self._previous_state = None
         
         # Track entity states
         self._entities_to_track = [
@@ -219,13 +223,17 @@ class SmartGarageSensor(SensorEntity):
 
         self._attr_available = True
 
+        # Store current state as previous before updating
+        if self._attr_native_value and self._attr_native_value != STATE_UNAVAILABLE:
+            self._previous_state = self._attr_native_value
+
         # Determine state based on sensor readings
         open_sensor_on = open_sensor_state.state == STATE_ON
         closed_sensor_on = closed_sensor_state.state == STATE_ON
 
         _LOGGER.debug(
-            "Sensor logic for '%s': open_on=%s, closed_on=%s",
-            self._name, open_sensor_on, closed_sensor_on
+            "Sensor logic for '%s': open_on=%s, closed_on=%s, previous_state=%s",
+            self._name, open_sensor_on, closed_sensor_on, self._previous_state
         )
 
         if open_sensor_on and not closed_sensor_on:
@@ -235,13 +243,22 @@ class SmartGarageSensor(SensorEntity):
             self._attr_native_value = STATE_CLOSED
             _LOGGER.debug("Sensor '%s' determined state: CLOSED", self._name)
         elif not open_sensor_on and not closed_sensor_on:
-            # Check if we're in the opening window
-            if self._is_opening():
-                self._attr_native_value = STATE_OPENING
-                _LOGGER.debug("Sensor '%s' determined state: OPENING", self._name)
+            # Check if we're in the opening/closing window
+            if self._is_in_motion():
+                # Determine if opening or closing based on previous state
+                if self._previous_state == STATE_OPEN:
+                    self._attr_native_value = STATE_CLOSING
+                    _LOGGER.debug("Sensor '%s' determined state: CLOSING (was open)", self._name)
+                elif self._previous_state == STATE_CLOSED:
+                    self._attr_native_value = STATE_OPENING
+                    _LOGGER.debug("Sensor '%s' determined state: OPENING (was closed)", self._name)
+                else:
+                    # Default to opening if no previous state
+                    self._attr_native_value = STATE_OPENING
+                    _LOGGER.debug("Sensor '%s' determined state: OPENING (no previous state)", self._name)
             else:
                 self._attr_native_value = STATE_UNAVAILABLE
-                _LOGGER.debug("Sensor '%s' determined state: UNAVAILABLE (both sensors off, not opening)", self._name)
+                _LOGGER.debug("Sensor '%s' determined state: UNAVAILABLE (both sensors off, not in motion)", self._name)
         else:
             # Both sensors on - this shouldn't happen
             _LOGGER.warning(
@@ -249,12 +266,12 @@ class SmartGarageSensor(SensorEntity):
             )
             self._attr_native_value = STATE_UNAVAILABLE
 
-    def _is_opening(self) -> bool:
-        """Check if the garage door is currently opening."""
+    def _is_in_motion(self) -> bool:
+        """Check if the garage door is currently in motion (opening or closing)."""
         toggle_entity_state = self.hass.states.get(self._toggle_entity)
         if not toggle_entity_state or not toggle_entity_state.last_changed:
             _LOGGER.debug(
-                "Cannot determine opening state for '%s': toggle_entity_state=%s, last_changed=%s",
+                "Cannot determine motion state for '%s': toggle_entity_state=%s, last_changed=%s",
                 self._name, 
                 toggle_entity_state.state if toggle_entity_state else "NOT_FOUND",
                 toggle_entity_state.last_changed if toggle_entity_state else "NOT_FOUND"
@@ -263,14 +280,14 @@ class SmartGarageSensor(SensorEntity):
 
         time_since_toggle = dt_util.utcnow() - toggle_entity_state.last_changed
         seconds_since_toggle = time_since_toggle.total_seconds()
-        is_opening = seconds_since_toggle < self._opening_duration
+        is_in_motion = seconds_since_toggle < self._opening_duration
         
         _LOGGER.debug(
-            "Opening check for '%s': seconds_since_toggle=%.1f, opening_duration=%d, is_opening=%s",
-            self._name, seconds_since_toggle, self._opening_duration, is_opening
+            "Motion check for '%s': seconds_since_toggle=%.1f, opening_duration=%d, is_in_motion=%s",
+            self._name, seconds_since_toggle, self._opening_duration, is_in_motion
         )
         
-        return is_opening
+        return is_in_motion
 
     @property
     def device_info(self) -> DeviceInfo:

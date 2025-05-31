@@ -111,15 +111,25 @@ For each configured garage door, the integration creates:
 
 The integration uses the following logic to determine garage door states:
 
-| Open Sensor | Closed Sensor | Time Since Toggle | State |
-|-------------|---------------|-------------------|-------|
-| ON | OFF | - | `open` |
-| OFF | ON | - | `closed` |
-| OFF | OFF | < opening_duration | `opening` |
-| OFF | OFF | ≥ opening_duration | `unavailable` |
-| ON | ON | - | `unavailable` |
-| unavailable | - | - | `unavailable` |
-| - | unavailable | - | `unavailable` |
+| Open Sensor | Closed Sensor | Previous State | Time Since Toggle | State |
+|-------------|---------------|----------------|-------------------|-------|
+| ON | OFF | - | - | `open` |
+| OFF | ON | - | - | `closed` |
+| OFF | OFF | `open` | < opening_duration | `closing` |
+| OFF | OFF | `closed` | < opening_duration | `opening` |
+| OFF | OFF | - | ≥ opening_duration | `unavailable` |
+| ON | ON | - | - | `unavailable` |
+| unavailable | - | - | - | `unavailable` |
+| - | unavailable | - | - | `unavailable` |
+
+### Smart Opening/Closing Detection
+
+The integration intelligently determines whether the door is opening or closing based on the previous state:
+
+- **Opening**: Door was previously `closed` → now both sensors are `off` → shows `opening`
+- **Closing**: Door was previously `open` → now both sensors are `off` → shows `closing`
+
+This provides accurate status regardless of whether you're opening or closing the door.
 
 ## Usage Examples
 
