@@ -127,7 +127,8 @@ class SmartGarageSensor(SensorEntity):
             self._name, self.entity_id
         )
         
-        # Check if tracked entities exist
+        # Check if tracked entities exist and log status
+        missing_entities = []
         for entity_id in self._entities_to_track:
             entity_state = self.hass.states.get(entity_id)
             if entity_state:
@@ -136,6 +137,7 @@ class SmartGarageSensor(SensorEntity):
                     entity_id, entity_state.state
                 )
             else:
+                missing_entities.append(entity_id)
                 _LOGGER.warning(
                     "Tracked entity '%s' not found! Available entities: %s",
                     entity_id, 
@@ -152,6 +154,15 @@ class SmartGarageSensor(SensorEntity):
         
         # Initial state update
         self._update_state()
+        
+        # If sensor is unavailable due to missing entities, schedule a retry
+        if self._attr_native_value == STATE_UNAVAILABLE and missing_entities:
+            _LOGGER.info(
+                "Sensor '%s' initially unavailable due to missing entities: %s. "
+                "Will retry in a few seconds...", 
+                self._name, missing_entities
+            )
+            await self._delayed_entity_check()
         
         _LOGGER.debug(
             "Initial state for sensor '%s': value=%s, available=%s",
@@ -288,7 +299,25 @@ class SmartGarageSensor(SensorEntity):
         elif both_sensors_off and self._previous_state == STATE_CLOSED and self._is_in_motion():
             return STATE_OPENING
             
-        # 6. Everything else is unavailable
+        # 6. Both sensors off + no previous state (first startup) = assume closed
+        # This is a reasonable assumption since most garage doors rest in closed position
+        elif both_sensors_off and not self._previous_state:
+            _LOGGER.debug(
+                "Initial state determination for '%s': both sensors off, assuming closed",
+                self._name
+            )
+            return STATE_CLOSED
+            
+        # 7. Both sensors off + previous state exists but not in motion = keep previous state
+        # This handles cases where sensors might temporarily go off but door hasn't moved
+        elif both_sensors_off and self._previous_state in [STATE_OPEN, STATE_CLOSED]:
+            _LOGGER.debug(
+                "Both sensors off for '%s', maintaining previous state: %s",
+                self._name, self._previous_state
+            )
+            return self._previous_state
+            
+        # 8. All other cases - truly unavailable
         else:
             return STATE_UNAVAILABLE
 
@@ -382,3 +411,41 @@ class SmartGarageSensor(SensorEntity):
         """Clean up when entity is removed."""
         self._clear_motion_tracking()
         await super().async_will_remove_from_hass() 
+
+    async def _delayed_entity_check(self) -> None:
+        """Check for missing entities with a delay to handle startup timing issues."""
+        import asyncio
+        
+        retry_attempts = 0
+        max_retries = 3
+        wait_times = [2, 5, 10]  # seconds to wait between attempts
+        
+        while retry_attempts < max_retries:
+            await asyncio.sleep(wait_times[retry_attempts])
+            
+            # Check if any previously missing entities are now available
+            all_entities_available = True
+            for entity_id in self._entities_to_track:
+                if not self.hass.states.get(entity_id):
+                    all_entities_available = False
+                    break
+            
+            if all_entities_available:
+                _LOGGER.info(
+                    "All required entities now available for sensor '%s', updating state",
+                    self._name
+                )
+                self._update_state()
+                self.async_write_ha_state()
+                return
+            
+            retry_attempts += 1
+            _LOGGER.debug(
+                "Retry %d/%d: Some entities still missing for sensor '%s'",
+                retry_attempts, max_retries, self._name
+            )
+        
+        _LOGGER.warning(
+            "After %d retry attempts, some entities are still missing for sensor '%s'",
+            max_retries, self._name
+        ) 

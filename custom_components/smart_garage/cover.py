@@ -147,26 +147,85 @@ class SmartGarageCover(CoverEntity):
         # Try immediate update first
         self._update_from_sensor()
         
-        if self._sensor_state == STATE_UNAVAILABLE:
-            # Wait a bit for sensor to be fully registered and try again
-            _LOGGER.debug("Sensor not found immediately, waiting 1 second and retrying...")
-            await asyncio.sleep(1)
+        # If sensor was found immediately, update HA state and return
+        if self._sensor_state != STATE_UNAVAILABLE:
+            self.async_write_ha_state()
+            return
+        
+        # Retry mechanism with exponential backoff
+        retry_attempts = 0
+        max_retries = 5
+        wait_times = [1, 2, 3, 5, 10]  # seconds to wait between attempts
+        
+        while retry_attempts < max_retries and self._sensor_state == STATE_UNAVAILABLE:
+            wait_time = wait_times[retry_attempts]
+            _LOGGER.debug(
+                "Sensor '%s' not found, waiting %d seconds and retrying (attempt %d/%d)...",
+                self._sensor_entity_id, wait_time, retry_attempts + 1, max_retries
+            )
+            
+            await asyncio.sleep(wait_time)
             self._update_from_sensor()
             
-            if self._sensor_state == STATE_UNAVAILABLE:
-                # One more try after another second
-                _LOGGER.debug("Sensor still not found, waiting 2 more seconds and retrying...")
-                await asyncio.sleep(2)
-                self._update_from_sensor()
+            # If sensor was found during retry, update HA state and return
+            if self._sensor_state != STATE_UNAVAILABLE:
+                _LOGGER.debug(
+                    "Sensor '%s' found during retry attempt %d, updating state",
+                    self._sensor_entity_id, retry_attempts + 1
+                )
+                self.async_write_ha_state()
+                return
                 
-                if self._sensor_state == STATE_UNAVAILABLE:
-                    _LOGGER.error(
-                        "Sensor '%s' still not found after 3 seconds! "
-                        "Available sensors: %s", 
-                        self._sensor_entity_id,
-                        [entity_id for entity_id in self.hass.states.async_entity_ids() 
-                         if entity_id.startswith('sensor.')][:20]
+            retry_attempts += 1
+        
+        # If we still haven't found the sensor after all retries
+        if self._sensor_state == STATE_UNAVAILABLE:
+            _LOGGER.error(
+                "Sensor '%s' still not found after %d retry attempts! "
+                "Available sensors: %s", 
+                self._sensor_entity_id, max_retries,
+                [entity_id for entity_id in self.hass.states.async_entity_ids() 
+                 if entity_id.startswith('sensor.')][:20]
+            )
+            
+            # Set up a periodic check to try again later
+            self._schedule_sensor_availability_check()
+        else:
+            # Update HA state if sensor was found
+            self.async_write_ha_state()
+
+    def _schedule_sensor_availability_check(self) -> None:
+        """Schedule periodic checks for sensor availability."""
+        import asyncio
+        
+        async def check_sensor_availability():
+            """Periodically check if the sensor becomes available."""
+            max_checks = 12  # Check for up to 60 seconds (12 * 5 seconds)
+            check_count = 0
+            
+            while check_count < max_checks:
+                await asyncio.sleep(5)  # Wait 5 seconds between checks
+                
+                # Check if sensor is now available
+                sensor_state = self.hass.states.get(self._sensor_entity_id)
+                if sensor_state:
+                    _LOGGER.info(
+                        "Sensor '%s' became available after %d seconds, updating cover '%s'",
+                        self._sensor_entity_id, (check_count + 1) * 5, self._name
                     )
+                    self._update_from_sensor()
+                    self.async_write_ha_state()
+                    return
+                    
+                check_count += 1
+            
+            _LOGGER.warning(
+                "Sensor '%s' never became available for cover '%s' after 60 seconds of periodic checks",
+                self._sensor_entity_id, self._name
+            )
+        
+        # Start the periodic check task
+        self.hass.async_create_task(check_sensor_availability())
 
     @callback
     def _handle_sensor_state_change(self, event) -> None:
@@ -194,6 +253,9 @@ class SmartGarageCover(CoverEntity):
             self._name, self._sensor_entity_id
         )
         
+        # Store previous availability to detect changes
+        previous_availability = getattr(self, '_attr_available', False)
+        
         if sensor_state:
             _LOGGER.debug(
                 "Sensor state found: state=%s, attributes=%s, last_changed=%s",
@@ -207,6 +269,13 @@ class SmartGarageCover(CoverEntity):
                 "Updated cover '%s': sensor_state=%s, available=%s",
                 self._name, self._sensor_state, self._attr_available
             )
+            
+            # If availability changed from False to True, log the improvement
+            if not previous_availability and self._attr_available:
+                _LOGGER.info(
+                    "Cover '%s' became available - sensor '%s' state: %s",
+                    self._name, self._sensor_entity_id, sensor_state.state
+                )
         else:
             _LOGGER.warning(
                 "Sensor '%s' not found for cover '%s'! Available sensors: %s",
