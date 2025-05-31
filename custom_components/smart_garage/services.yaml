@@ -1,0 +1,35 @@
+# Smart Garage Door Integration Services
+# This integration uses standard Home Assistant cover services.
+# No custom services are defined.
+
+# Available services for cover entities:
+# - cover.open_cover: Open the garage door (only works when closed)
+# - cover.close_cover: Close the garage door (only works when open)  
+# - cover.stop_cover: Stop the garage door (only works when opening/closing)
+# - cover.toggle: Toggle the garage door state
+
+# The integration automatically calls the appropriate toggle service based on entity type:
+# - For switch entities: switch.toggle
+# - For light entities: light.toggle (perfect for Shelly devices)
+
+# Example service calls:
+# service: cover.open_cover
+# target:
+#   entity_id: cover.main_garage
+
+# service: cover.close_cover  
+# target:
+#   entity_id: cover.main_garage
+
+# service: cover.stop_cover
+# target:
+#   entity_id: cover.main_garage
+
+# Direct toggle service calls (if needed for automation):
+# service: switch.toggle  # For switch entities
+# target:
+#   entity_id: switch.garage_door_opener
+
+# service: light.toggle   # For light entities (Shelly devices)
+# target:
+#   entity_id: light.shelly_garage_relay 

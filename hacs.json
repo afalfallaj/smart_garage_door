@@ -1,0 +1,8 @@
+{
+  "name": "Smart Garage Door",
+  "content_in_root": false,
+  "filename": "smart_garage",
+  "render_readme": true,
+  "iot_class": "Local Polling",
+  "homeassistant": "2023.8.0"
+} 
