@@ -111,33 +111,29 @@ For each configured garage door, the integration creates:
 
 The integration uses the following logic to determine garage door states:
 
-| Open Sensor | Closed Sensor | Previous State | Scenario | State |
-|-------------|---------------|----------------|----------|-------|
+| Open Sensor | Closed Sensor | Previous State | Time Since Toggle | State |
+|-------------|---------------|----------------|-------------------|-------|
+| ON | ON | - | - | `unavailable` |
 | ON | OFF | - | - | `open` |
 | OFF | ON | - | - | `closed` |
-| OFF | OFF | `open` | Door closing (any trigger) | `closing` |
-| OFF | OFF | `closed` | Door opening (any trigger) | `opening` |
-| OFF | OFF | `opening` | Door still opening | `opening` |
-| OFF | OFF | `closing` | Door still closing | `closing` |
-| OFF | OFF | `opening`/`closing` | Motion > motion_duration | `unavailable` |
-| OFF | OFF | none | Recent toggle activity | `opening` |
-| OFF | OFF | none | No recent activity | `unavailable` |
-| ON | ON | - | - | `unavailable` |
+| OFF | OFF | `open` | < motion_duration | `closing` |
+| OFF | OFF | `closed` | < motion_duration | `opening` |
+| OFF | OFF | - | ≥ motion_duration | `unavailable` |
 | unavailable | - | - | - | `unavailable` |
 | - | unavailable | - | - | `unavailable` |
 
 ### Smart Opening/Closing Detection
 
-The integration intelligently determines whether the door is opening or closing based on the previous state, **regardless of how the door was triggered**:
+The integration follows a clear 6-step logic for state determination:
 
-- **Manual Triggers Supported**: Works with physical buttons, remote controls, other automations, or any trigger method
-- **Opening**: Door was previously `closed` → now both sensors are `off` → shows `opening`
-- **Closing**: Door was previously `open` → now both sensors are `off` → shows `closing`
-- **Continuous Motion**: If already `opening` or `closing`, continues showing the same state until sensors change
-- **Timeout Protection**: If motion exceeds `motion_duration`, state becomes `unavailable` (door may be stuck)
-- **Integration Triggers**: When triggered through this integration, uses toggle timing as additional validation
+1. **Both sensors ON** → `unavailable` (impossible state)
+2. **Open sensor ON** → `open` 
+3. **Closed sensor ON** → `closed`
+4. **Previous state was open + in motion** → `closing`
+5. **Previous state was closed + in motion** → `opening`  
+6. **Everything else** → `unavailable`
 
-This provides accurate status regardless of whether you use the Home Assistant interface, physical buttons, remotes, or any other trigger method.
+**Motion Detection**: Uses toggle entity timing within `motion_duration` to detect if the door is currently in motion, supporting any trigger method (Home Assistant, physical buttons, remotes, other automations).
 
 ## Usage Examples
 

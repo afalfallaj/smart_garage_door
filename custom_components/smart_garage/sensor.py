@@ -236,65 +236,44 @@ class SmartGarageSensor(SensorEntity):
             self._name, open_sensor_on, closed_sensor_on, self._previous_state
         )
 
-        if open_sensor_on and not closed_sensor_on:
+        # 1. If both sensors are on, show as unavailable (shouldn't happen normally)
+        if open_sensor_on and closed_sensor_on:
+            self._attr_native_value = STATE_UNAVAILABLE
+            _LOGGER.debug("Sensor '%s' determined state: UNAVAILABLE (both sensors on)", self._name)
+            
+        # 2. If open sensor is on, show as open
+        elif open_sensor_on:
             self._attr_native_value = STATE_OPEN
             # Clear motion tracking when reaching a final state
             if hasattr(self, '_motion_start_time'):
                 delattr(self, '_motion_start_time')
             _LOGGER.debug("Sensor '%s' determined state: OPEN", self._name)
-        elif not open_sensor_on and closed_sensor_on:
+            
+        # 3. If closed sensor is on, show as closed
+        elif closed_sensor_on:
             self._attr_native_value = STATE_CLOSED
             # Clear motion tracking when reaching a final state
             if hasattr(self, '_motion_start_time'):
                 delattr(self, '_motion_start_time')
             _LOGGER.debug("Sensor '%s' determined state: CLOSED", self._name)
-        elif not open_sensor_on and not closed_sensor_on:
-            # Both sensors are off - door is likely in motion
-            # Track when motion starts for manual triggers
-            if self._previous_state in [STATE_OPEN, STATE_CLOSED] and not hasattr(self, '_motion_start_time'):
-                self._motion_start_time = dt_util.utcnow()
-                _LOGGER.debug("Sensor '%s' started motion tracking", self._name)
             
-            # Determine if opening or closing based on previous state
-            if self._previous_state == STATE_OPEN:
-                # Check if we've been in motion too long
-                if self._has_motion_exceeded_duration():
-                    self._attr_native_value = STATE_UNAVAILABLE
-                    _LOGGER.debug("Sensor '%s' determined state: UNAVAILABLE (closing too long)", self._name)
-                else:
-                    self._attr_native_value = STATE_CLOSING
-                    _LOGGER.debug("Sensor '%s' determined state: CLOSING (was open)", self._name)
-            elif self._previous_state == STATE_CLOSED:
-                # Check if we've been in motion too long
-                if self._has_motion_exceeded_duration():
-                    self._attr_native_value = STATE_UNAVAILABLE
-                    _LOGGER.debug("Sensor '%s' determined state: UNAVAILABLE (opening too long)", self._name)
-                else:
-                    self._attr_native_value = STATE_OPENING
-                    _LOGGER.debug("Sensor '%s' determined state: OPENING (was closed)", self._name)
-            elif self._previous_state in [STATE_OPENING, STATE_CLOSING]:
-                # Continue with the same motion state if not exceeded duration
-                if self._has_motion_exceeded_duration():
-                    self._attr_native_value = STATE_UNAVAILABLE
-                    _LOGGER.debug("Sensor '%s' determined state: UNAVAILABLE (motion too long)", self._name)
-                else:
-                    self._attr_native_value = self._previous_state
-                    _LOGGER.debug("Sensor '%s' continuing motion state: %s", self._name, self._previous_state)
-            else:
-                # No previous state to determine direction
-                # Check if our toggle was recently activated to help determine direction
-                if self._is_in_motion():
-                    self._attr_native_value = STATE_OPENING  # Default to opening
-                    _LOGGER.debug("Sensor '%s' determined state: OPENING (no previous state, but recent toggle)", self._name)
-                else:
-                    self._attr_native_value = STATE_UNAVAILABLE
-                    _LOGGER.debug("Sensor '%s' determined state: UNAVAILABLE (no previous state, no recent toggle)", self._name)
+        # 4. If previous state was open and in motion (not exceeding motion_duration), show as closing
+        elif self._previous_state == STATE_OPEN and self._is_in_motion():
+            self._attr_native_value = STATE_CLOSING
+            _LOGGER.debug("Sensor '%s' determined state: CLOSING (was open, in motion)", self._name)
+            
+        # 5. If previous state was closed and in motion (not exceeding motion_duration), show as opening
+        elif self._previous_state == STATE_CLOSED and self._is_in_motion():
+            self._attr_native_value = STATE_OPENING
+            _LOGGER.debug("Sensor '%s' determined state: OPENING (was closed, in motion)", self._name)
+            
+        # 6. Everything else is unavailable
         else:
-            # Both sensors on - this shouldn't happen
-            _LOGGER.warning(
-                "Sensor '%s' has invalid state: both sensors are ON", self._name
-            )
             self._attr_native_value = STATE_UNAVAILABLE
+            _LOGGER.debug(
+                "Sensor '%s' determined state: UNAVAILABLE (previous_state=%s, in_motion=%s)",
+                self._name, self._previous_state, self._is_in_motion()
+            )
 
     def _is_in_motion(self) -> bool:
         """Check if the garage door is currently in motion (opening or closing)."""
@@ -318,40 +297,6 @@ class SmartGarageSensor(SensorEntity):
         )
         
         return is_in_motion
-
-    def _has_motion_exceeded_duration(self) -> bool:
-        """Check if the garage door has been in motion for too long."""
-        # For manual triggers, we need to track when the motion state started
-        # Since we don't know when manual motion started, we'll use a more conservative approach
-        
-        # If our toggle was recently activated, use that timing
-        toggle_entity_state = self.hass.states.get(self._toggle_entity)
-        if toggle_entity_state and toggle_entity_state.last_changed:
-            time_since_toggle = dt_util.utcnow() - toggle_entity_state.last_changed
-            seconds_since_toggle = time_since_toggle.total_seconds()
-            
-            # If our toggle was recent and we're past duration, it's exceeded
-            if seconds_since_toggle < (self._motion_duration * 2):  # Allow some buffer for manual
-                exceeded = seconds_since_toggle > self._motion_duration
-                _LOGGER.debug(
-                    "Motion duration check for '%s': seconds_since_toggle=%.1f, motion_duration=%d, exceeded=%s",
-                    self._name, seconds_since_toggle, self._motion_duration, exceeded
-                )
-                return exceeded
-        
-        # For purely manual triggers, we're more conservative
-        # Check if we've been in a motion state for too long based on our own state changes
-        if hasattr(self, '_motion_start_time'):
-            time_in_motion = dt_util.utcnow() - self._motion_start_time
-            exceeded = time_in_motion.total_seconds() > self._motion_duration
-            _LOGGER.debug(
-                "Manual motion duration check for '%s': time_in_motion=%.1f, motion_duration=%d, exceeded=%s",
-                self._name, time_in_motion.total_seconds(), self._motion_duration, exceeded
-            )
-            return exceeded
-            
-        # If we can't determine timing, don't timeout
-        return False
 
     @property
     def device_info(self) -> DeviceInfo:
