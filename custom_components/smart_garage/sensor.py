@@ -250,8 +250,9 @@ class SmartGarageSensor(SensorEntity):
         # Apply state logic (clear and concise 6-step logic)
         new_state = self._determine_garage_state(open_sensor_on, closed_sensor_on, both_sensors_off)
         
-        # Clear motion tracking when reaching final states
-        if new_state in [STATE_OPEN, STATE_CLOSED, STATE_UNAVAILABLE]:
+        # Clear motion tracking only when reaching final states (open/closed)
+        # Motion timeout clearing is handled in _is_in_motion()
+        if new_state in [STATE_OPEN, STATE_CLOSED]:
             self._motion_start_time = None
 
         self._attr_native_value = new_state
@@ -299,10 +300,8 @@ class SmartGarageSensor(SensorEntity):
 
     def _is_in_motion(self) -> bool:
         """
-        Check if garage door is in motion based on timing only.
-        Assumes sensor states have already been validated by caller.
+        Check if garage door is in motion based on tracked motion start time.
         """
-        # Primary: Use tracked motion start time (handles all trigger types)
         if self._motion_start_time:
             time_since_motion_start = dt_util.utcnow() - self._motion_start_time
             seconds_since_motion_start = time_since_motion_start.total_seconds()
@@ -313,23 +312,17 @@ class SmartGarageSensor(SensorEntity):
                 self._name, seconds_since_motion_start, self._motion_duration, within_duration
             )
             
-            return within_duration
-        
-        # Fallback: Use toggle entity timing (for backwards compatibility)
-        toggle_entity_state = self.hass.states.get(self._toggle_entity)
-        if toggle_entity_state and toggle_entity_state.last_changed:
-            time_since_toggle = dt_util.utcnow() - toggle_entity_state.last_changed
-            seconds_since_toggle = time_since_toggle.total_seconds()
-            within_duration = seconds_since_toggle < self._motion_duration
-            
-            _LOGGER.debug(
-                "Motion check for '%s': fallback to toggle timing - seconds_since_toggle=%.1f, motion_duration=%d, within_duration=%s",
-                self._name, seconds_since_toggle, self._motion_duration, within_duration
-            )
+            # Clear motion tracking if duration expired
+            if not within_duration:
+                _LOGGER.debug(
+                    "Motion duration expired for '%s', clearing motion tracking",
+                    self._name
+                )
+                self._motion_start_time = None
             
             return within_duration
         
-        _LOGGER.debug("Motion check for '%s': no timing available", self._name)
+        # No motion tracking available
         return False
 
     @property
@@ -351,3 +344,10 @@ class SmartGarageSensor(SensorEntity):
             ATTR_TOGGLE_ENTITY: self._toggle_entity,
             ATTR_MOTION_DURATION: self._motion_duration,
         }
+        # Add motion tracking info for debugging
+        if self._motion_start_time:
+            time_since_motion = dt_util.utcnow() - self._motion_start_time
+            attributes["motion_start_time"] = self._motion_start_time.isoformat()
+            attributes["seconds_since_motion_start"] = round(time_since_motion.total_seconds(), 1)
+        
+        return attributes 
