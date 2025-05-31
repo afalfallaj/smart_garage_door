@@ -212,9 +212,9 @@ smart_garage:
 
 ## Troubleshooting
 
-### Check Logs
+### Enable Debug Logging
 
-Enable debug logging by adding to `configuration.yaml`:
+To troubleshoot issues (especially when covers show as "unavailable"), enable debug logging by adding this to your `configuration.yaml`:
 
 ```yaml
 logger:
@@ -223,13 +223,73 @@ logger:
     custom_components.smart_garage: debug
 ```
 
+After adding this, restart Home Assistant and check the logs at **Settings** → **System** → **Logs** or in your Home Assistant log file.
+
+### Debug Log Analysis
+
+When covers show as "unavailable", look for these key log messages:
+
+1. **Integration Setup**:
+   ```
+   Setting up Smart Garage from config entry: [Garage Name]
+   ```
+
+2. **Sensor Creation**:
+   ```
+   Created sensor entity with unique_id: smart_garage_[name]_state
+   ```
+
+3. **Entity Validation**:
+   ```
+   Tracked entity '[entity_id]' not found! Available entities: [list]
+   ```
+
+4. **Cover Dependency**:
+   ```
+   Sensor 'sensor.smart_garage_[name]_state' not found for cover '[name]'!
+   ```
+
 ### Common Issues
 
 1. **Entities not created**: Verify entity IDs in configuration exist and are correct
-2. **State stuck on "opening"**: Check if toggle entity ID is correct and state changes are detected
-3. **Cover not responding**: Ensure sensor states are updating correctly
+   - Check logs for "Tracked entity '[entity_id]' not found!"
+   - Verify sensors exist in **Developer Tools** → **States**
+
+2. **Cover shows "unavailable"**: Usually means the corresponding sensor isn't found
+   - Look for: "Sensor 'sensor.smart_garage_[name]_state' not found for cover"
+   - Verify the sensor entity was created successfully
+
+3. **State stuck on "opening"**: Check if toggle entity ID is correct and state changes are detected
+   - Look for toggle entity state changes in debug logs
+   - Verify opening_duration setting is appropriate
+
 4. **Toggle not working**: Verify the toggle entity domain (switch or light) is supported
+   - Check logs for "Failed to call [domain].toggle for [entity]"
+   - Ensure entity exists and is controllable
+
 5. **UI configuration not available**: Restart Home Assistant after installation
+
+### Debug Information to Collect
+
+When reporting issues, please include:
+
+1. **Configuration**: Your exact garage configuration (anonymize entity IDs if needed)
+2. **Entity Status**: Check if your sensors and toggle entities exist in **Developer Tools** → **States**
+3. **Debug Logs**: Relevant log entries with debug logging enabled
+4. **Home Assistant Version**: Your HA version and when the issue started
+
+### Log Example
+
+Here's what successful setup should look like in debug logs:
+
+```
+[custom_components.smart_garage] Setting up Smart Garage from config entry: Main Garage
+[custom_components.smart_garage.sensor] Created sensor entity with unique_id: smart_garage_main_garage_state
+[custom_components.smart_garage.cover] Created cover entity with unique_id: smart_garage_main_garage_cover
+[custom_components.smart_garage.sensor] Tracked entity 'binary_sensor.garage_open' found: state=off
+[custom_components.smart_garage.sensor] Initial state for sensor 'Main Garage': value=closed, available=True
+[custom_components.smart_garage.cover] Initial state for cover 'Main Garage': sensor_state=closed, available=True
+```
 
 ## Requirements
 

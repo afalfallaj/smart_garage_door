@@ -2,10 +2,12 @@
   "domain": "smart_garage",
   "name": "Smart Garage Door",
   "version": "1.0.0",
-  "documentation": "https://github.com/yourusername/smart_garage",
-  "issue_tracker": "https://github.com/yourusername/smart_garage/issues",
+  "documentation": "https://github.com/afalfallaj/smart_garage_door",
+  "issue_tracker": "https://github.com/afalfallaj/smart_garage_door/issues",
   "dependencies": [],
-  "codeowners": ["@yourusername"],
+  "codeowners": [
+    "@afalfallaj"
+  ],
   "requirements": [],
   "iot_class": "local_polling",
   "integration_type": "device",

@@ -42,16 +42,23 @@ async def async_setup_platform(
     discovery_info: dict[str, Any] | None = None,
 ) -> None:
     """Set up the Smart Garage covers from YAML configuration."""
+    _LOGGER.debug("Setting up Smart Garage covers from YAML configuration")
+    
     if DOMAIN not in hass.data:
+        _LOGGER.debug("No Smart Garage data found in hass.data")
         return
 
     garages = hass.data[DOMAIN].get("garages", [])
+    _LOGGER.debug("Found %d garage configurations in YAML", len(garages))
+    
     entities = []
 
     for garage_config in garages:
+        _LOGGER.debug("Creating cover for garage: %s", garage_config.get("name", "unknown"))
         cover = SmartGarageCover(hass, garage_config)
         entities.append(cover)
 
+    _LOGGER.debug("Adding %d cover entities", len(entities))
     async_add_entities(entities, True)
 
 
@@ -61,8 +68,14 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up Smart Garage covers from config entry."""
+    _LOGGER.debug("Setting up Smart Garage cover from config entry: %s", config_entry.title)
+    
     config = config_entry.data
+    _LOGGER.debug("Config entry data: %s", config)
+    
     cover = SmartGarageCover(hass, config)
+    _LOGGER.debug("Created cover entity with unique_id: %s", cover.unique_id)
+    
     async_add_entities([cover], True)
 
 
@@ -98,55 +111,119 @@ class SmartGarageCover(CoverEntity):
 
         # Track the sensor state
         self._sensor_state = STATE_UNAVAILABLE
+        
+        _LOGGER.debug(
+            "Initialized cover '%s' with config: open_sensor=%s, closed_sensor=%s, "
+            "toggle_entity=%s, toggle_domain=%s, sensor_entity_id=%s",
+            self._name, self._open_sensor, self._closed_sensor, 
+            self._toggle_entity, self._toggle_domain, self._sensor_entity_id
+        )
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
+        
+        _LOGGER.debug("Cover '%s' added to hass, setting up state tracking", self._name)
         
         # Track state changes of the corresponding sensor
         async_track_state_change_event(
             self.hass, [self._sensor_entity_id], self._handle_sensor_state_change
         )
         
+        _LOGGER.debug("Set up state tracking for sensor: %s", self._sensor_entity_id)
+        
         # Initial state update
         self._update_from_sensor()
+        
+        _LOGGER.debug(
+            "Initial state for cover '%s': sensor_state=%s, available=%s",
+            self._name, self._sensor_state, self._attr_available
+        )
 
     @callback
     def _handle_sensor_state_change(self, event) -> None:
         """Handle state changes of the sensor."""
+        _LOGGER.debug(
+            "Sensor state change event for cover '%s': %s", 
+            self._name, event.data if event else "no event data"
+        )
+        
         self._update_from_sensor()
         self.async_write_ha_state()
+        
+        _LOGGER.debug(
+            "Updated cover '%s' state: sensor_state=%s, available=%s",
+            self._name, self._sensor_state, self._attr_available
+        )
 
     @callback
     def _update_from_sensor(self) -> None:
         """Update cover state from sensor state."""
         sensor_state = self.hass.states.get(self._sensor_entity_id)
         
+        _LOGGER.debug(
+            "Updating cover '%s' from sensor '%s'", 
+            self._name, self._sensor_entity_id
+        )
+        
         if sensor_state:
+            _LOGGER.debug(
+                "Sensor state found: state=%s, attributes=%s, last_changed=%s",
+                sensor_state.state, sensor_state.attributes, sensor_state.last_changed
+            )
+            
             self._sensor_state = sensor_state.state
             self._attr_available = sensor_state.state != STATE_UNAVAILABLE
+            
+            _LOGGER.debug(
+                "Updated cover '%s': sensor_state=%s, available=%s",
+                self._name, self._sensor_state, self._attr_available
+            )
         else:
+            _LOGGER.warning(
+                "Sensor '%s' not found for cover '%s'! Available sensors: %s",
+                self._sensor_entity_id, self._name, 
+                [entity_id for entity_id in self.hass.states.async_entity_ids() 
+                 if entity_id.startswith('sensor.')][:10]  # Show first 10 sensors
+            )
+            
             self._sensor_state = STATE_UNAVAILABLE
             self._attr_available = False
 
     @property
     def is_closed(self) -> bool | None:
         """Return true if cover is closed, else False."""
+        result = None
         if self._sensor_state == STATE_CLOSED:
-            return True
+            result = True
         elif self._sensor_state == STATE_OPEN:
-            return False
-        return None
+            result = False
+            
+        _LOGGER.debug(
+            "Cover '%s' is_closed: sensor_state=%s, result=%s",
+            self._name, self._sensor_state, result
+        )
+        return result
 
     @property
     def is_opening(self) -> bool:
         """Return true if cover is opening."""
-        return self._sensor_state == STATE_OPENING
+        result = self._sensor_state == STATE_OPENING
+        _LOGGER.debug(
+            "Cover '%s' is_opening: sensor_state=%s, result=%s",
+            self._name, self._sensor_state, result
+        )
+        return result
 
     @property
     def is_closing(self) -> bool:
         """Return true if cover is closing."""
-        return self._sensor_state == STATE_CLOSING
+        result = self._sensor_state == STATE_CLOSING
+        _LOGGER.debug(
+            "Cover '%s' is_closing: sensor_state=%s, result=%s",
+            self._name, self._sensor_state, result
+        )
+        return result
 
     @property
     def icon(self) -> str:
@@ -177,15 +254,27 @@ class SmartGarageCover(CoverEntity):
             domain, service, self._toggle_entity, self._name
         )
 
-        await self.hass.services.async_call(
-            domain,
-            service,
-            {"entity_id": self._toggle_entity},
-            blocking=True,
-        )
+        try:
+            await self.hass.services.async_call(
+                domain,
+                service,
+                {"entity_id": self._toggle_entity},
+                blocking=True,
+            )
+            _LOGGER.debug("Successfully called %s.%s for %s", domain, service, self._toggle_entity)
+        except Exception as ex:
+            _LOGGER.error(
+                "Failed to call %s.%s for %s: %s", 
+                domain, service, self._toggle_entity, ex
+            )
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Open the cover."""
+        _LOGGER.debug(
+            "Open cover requested for '%s': current_state=%s", 
+            self._name, self._sensor_state
+        )
+        
         # Only open if sensor state is "closed"
         if self._sensor_state != STATE_CLOSED:
             _LOGGER.warning(
@@ -198,6 +287,11 @@ class SmartGarageCover(CoverEntity):
 
     async def async_close_cover(self, **kwargs: Any) -> None:
         """Close the cover."""
+        _LOGGER.debug(
+            "Close cover requested for '%s': current_state=%s", 
+            self._name, self._sensor_state
+        )
+        
         # Only close if sensor state is "open"
         if self._sensor_state != STATE_OPEN:
             _LOGGER.warning(
@@ -210,6 +304,11 @@ class SmartGarageCover(CoverEntity):
 
     async def async_stop_cover(self, **kwargs: Any) -> None:
         """Stop the cover."""
+        _LOGGER.debug(
+            "Stop cover requested for '%s': current_state=%s", 
+            self._name, self._sensor_state
+        )
+        
         # Only stop if cover is opening or closing
         if self._sensor_state not in [STATE_OPENING, STATE_CLOSING]:
             _LOGGER.warning(
