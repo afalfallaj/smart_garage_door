@@ -98,6 +98,9 @@ class SmartGarageSensor(SensorEntity):
         # Track previous state for opening/closing logic
         self._previous_state = None
         
+        # Track motion timing - when motion actually starts (both sensors go off)
+        self._motion_start_time = None
+        
         # Track entity states
         self._entities_to_track = [
             self._open_sensor,
@@ -117,8 +120,8 @@ class SmartGarageSensor(SensorEntity):
         await super().async_added_to_hass()
         
         _LOGGER.debug(
-            "Sensor '%s' added to hass with entity_id: %s (expected: %s)", 
-            self._name, self.entity_id, f"sensor.{DOMAIN}_{self._name.lower().replace(' ', '_')}_state"
+            "Sensor '%s' added to hass with entity_id: %s", 
+            self._name, self.entity_id
         )
         
         # Check if tracked entities exist
@@ -126,8 +129,8 @@ class SmartGarageSensor(SensorEntity):
             entity_state = self.hass.states.get(entity_id)
             if entity_state:
                 _LOGGER.debug(
-                    "Tracked entity '%s' found: state=%s, attributes=%s",
-                    entity_id, entity_state.state, entity_state.attributes
+                    "Tracked entity '%s' found: state=%s",
+                    entity_id, entity_state.state
                 )
             else:
                 _LOGGER.warning(
@@ -150,12 +153,6 @@ class SmartGarageSensor(SensorEntity):
         _LOGGER.debug(
             "Initial state for sensor '%s': value=%s, available=%s",
             self._name, self._attr_native_value, self._attr_available
-        )
-        
-        # Verify the sensor can be found by the cover
-        _LOGGER.debug(
-            "Verifying sensor can be found: %s exists = %s", 
-            self.entity_id, self.hass.states.get(self.entity_id) is not None
         )
 
     @callback
@@ -181,6 +178,7 @@ class SmartGarageSensor(SensorEntity):
         """Update the sensor state based on garage door logic."""
         _LOGGER.debug("Updating state for sensor '%s'", self._name)
         
+        # Get current entity states
         open_sensor_state = self.hass.states.get(self._open_sensor)
         closed_sensor_state = self.hass.states.get(self._closed_sensor)
         toggle_entity_state = self.hass.states.get(self._toggle_entity)
@@ -192,6 +190,7 @@ class SmartGarageSensor(SensorEntity):
             toggle_entity_state.state if toggle_entity_state else "NOT_FOUND"
         )
 
+        # Check if all required entities exist
         if not open_sensor_state or not closed_sensor_state or not toggle_entity_state:
             missing_entities = []
             if not open_sensor_state:
@@ -227,76 +226,111 @@ class SmartGarageSensor(SensorEntity):
         if self._attr_native_value and self._attr_native_value != STATE_UNAVAILABLE:
             self._previous_state = self._attr_native_value
 
-        # Determine state based on sensor readings
+        # Convert sensor states to boolean
         open_sensor_on = open_sensor_state.state == STATE_ON
         closed_sensor_on = closed_sensor_state.state == STATE_ON
+        both_sensors_off = not open_sensor_on and not closed_sensor_on
 
         _LOGGER.debug(
-            "Sensor logic for '%s': open_on=%s, closed_on=%s, previous_state=%s",
-            self._name, open_sensor_on, closed_sensor_on, self._previous_state
+            "Sensor logic for '%s': open_on=%s, closed_on=%s, both_off=%s, previous_state=%s",
+            self._name, open_sensor_on, closed_sensor_on, both_sensors_off, self._previous_state
         )
 
-        # 1. If both sensors are on, show as unavailable (shouldn't happen normally)
+        # Detect motion start: transition from definite state (open/closed) to both sensors off
+        was_in_definite_state = self._previous_state in [STATE_OPEN, STATE_CLOSED]
+        motion_just_started = both_sensors_off and was_in_definite_state and not self._motion_start_time
+        
+        if motion_just_started:
+            self._motion_start_time = dt_util.utcnow()
+            _LOGGER.debug(
+                "Motion started for '%s': previous_state=%s, motion_start_time=%s",
+                self._name, self._previous_state, self._motion_start_time
+            )
+
+        # Apply state logic (clear and concise 6-step logic)
+        new_state = self._determine_garage_state(open_sensor_on, closed_sensor_on, both_sensors_off)
+        
+        # Clear motion tracking when reaching final states
+        if new_state in [STATE_OPEN, STATE_CLOSED, STATE_UNAVAILABLE]:
+            self._motion_start_time = None
+
+        self._attr_native_value = new_state
+        
+        _LOGGER.debug(
+            "Sensor '%s' determined state: %s", 
+            self._name, new_state
+        )
+
+    def _determine_garage_state(self, open_sensor_on: bool, closed_sensor_on: bool, both_sensors_off: bool) -> str:
+        """
+        Determine garage door state using clear 6-step logic.
+        
+        Args:
+            open_sensor_on: True if open sensor is on
+            closed_sensor_on: True if closed sensor is on  
+            both_sensors_off: True if both sensors are off
+            
+        Returns:
+            The determined state string
+        """
+        # 1. Both sensors on - impossible state
         if open_sensor_on and closed_sensor_on:
-            self._attr_native_value = STATE_UNAVAILABLE
-            _LOGGER.debug("Sensor '%s' determined state: UNAVAILABLE (both sensors on)", self._name)
+            return STATE_UNAVAILABLE
             
-        # 2. If open sensor is on, show as open
+        # 2. Open sensor on - door is open
         elif open_sensor_on:
-            self._attr_native_value = STATE_OPEN
-            # Clear motion tracking when reaching a final state
-            if hasattr(self, '_motion_start_time'):
-                delattr(self, '_motion_start_time')
-            _LOGGER.debug("Sensor '%s' determined state: OPEN", self._name)
+            return STATE_OPEN
             
-        # 3. If closed sensor is on, show as closed
+        # 3. Closed sensor on - door is closed
         elif closed_sensor_on:
-            self._attr_native_value = STATE_CLOSED
-            # Clear motion tracking when reaching a final state
-            if hasattr(self, '_motion_start_time'):
-                delattr(self, '_motion_start_time')
-            _LOGGER.debug("Sensor '%s' determined state: CLOSED", self._name)
+            return STATE_CLOSED
             
-        # 4. If previous state was open and in motion (not exceeding motion_duration), show as closing
-        elif self._previous_state == STATE_OPEN and self._is_in_motion():
-            self._attr_native_value = STATE_CLOSING
-            _LOGGER.debug("Sensor '%s' determined state: CLOSING (was open, in motion)", self._name)
+        # 4. Both sensors off + previous state was open + in motion = closing
+        elif both_sensors_off and self._previous_state == STATE_OPEN and self._is_in_motion():
+            return STATE_CLOSING
             
-        # 5. If previous state was closed and in motion (not exceeding motion_duration), show as opening
-        elif self._previous_state == STATE_CLOSED and self._is_in_motion():
-            self._attr_native_value = STATE_OPENING
-            _LOGGER.debug("Sensor '%s' determined state: OPENING (was closed, in motion)", self._name)
+        # 5. Both sensors off + previous state was closed + in motion = opening
+        elif both_sensors_off and self._previous_state == STATE_CLOSED and self._is_in_motion():
+            return STATE_OPENING
             
         # 6. Everything else is unavailable
         else:
-            self._attr_native_value = STATE_UNAVAILABLE
-            _LOGGER.debug(
-                "Sensor '%s' determined state: UNAVAILABLE (previous_state=%s, in_motion=%s)",
-                self._name, self._previous_state, self._is_in_motion()
-            )
+            return STATE_UNAVAILABLE
 
     def _is_in_motion(self) -> bool:
-        """Check if the garage door is currently in motion (opening or closing)."""
-        toggle_entity_state = self.hass.states.get(self._toggle_entity)
-        if not toggle_entity_state or not toggle_entity_state.last_changed:
+        """
+        Check if garage door is in motion based on timing only.
+        Assumes sensor states have already been validated by caller.
+        """
+        # Primary: Use tracked motion start time (handles all trigger types)
+        if self._motion_start_time:
+            time_since_motion_start = dt_util.utcnow() - self._motion_start_time
+            seconds_since_motion_start = time_since_motion_start.total_seconds()
+            within_duration = seconds_since_motion_start < self._motion_duration
+            
             _LOGGER.debug(
-                "Cannot determine motion state for '%s': toggle_entity_state=%s, last_changed=%s",
-                self._name, 
-                toggle_entity_state.state if toggle_entity_state else "NOT_FOUND",
-                toggle_entity_state.last_changed if toggle_entity_state else "NOT_FOUND"
+                "Motion check for '%s': seconds_since_motion_start=%.1f, motion_duration=%d, within_duration=%s",
+                self._name, seconds_since_motion_start, self._motion_duration, within_duration
             )
-            return False
-
-        time_since_toggle = dt_util.utcnow() - toggle_entity_state.last_changed
-        seconds_since_toggle = time_since_toggle.total_seconds()
-        is_in_motion = seconds_since_toggle < self._motion_duration
+            
+            return within_duration
         
-        _LOGGER.debug(
-            "Motion check for '%s': seconds_since_toggle=%.1f, motion_duration=%d, is_in_motion=%s",
-            self._name, seconds_since_toggle, self._motion_duration, is_in_motion
-        )
+        # Fallback: Use toggle entity timing (for backwards compatibility)
+        toggle_entity_state = self.hass.states.get(self._toggle_entity)
+        if toggle_entity_state and toggle_entity_state.last_changed:
+            time_since_toggle = dt_util.utcnow() - toggle_entity_state.last_changed
+            seconds_since_toggle = time_since_toggle.total_seconds()
+            within_duration = seconds_since_toggle < self._motion_duration
+            
+            _LOGGER.debug(
+                "Motion check for '%s': fallback to toggle timing - seconds_since_toggle=%.1f, motion_duration=%d, within_duration=%s",
+                self._name, seconds_since_toggle, self._motion_duration, within_duration
+            )
+            
+            return within_duration
         
-        return is_in_motion
+        _LOGGER.debug("Motion check for '%s': no timing available", self._name)
+        return False
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -311,9 +345,9 @@ class SmartGarageSensor(SensorEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes."""
-        return {
+        attributes = {
             ATTR_OPEN_SENSOR: self._open_sensor,
             ATTR_CLOSED_SENSOR: self._closed_sensor,
             ATTR_TOGGLE_ENTITY: self._toggle_entity,
             ATTR_MOTION_DURATION: self._motion_duration,
-        } 
+        }

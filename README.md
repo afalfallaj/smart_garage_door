@@ -111,8 +111,8 @@ For each configured garage door, the integration creates:
 
 The integration uses the following logic to determine garage door states:
 
-| Open Sensor | Closed Sensor | Previous State | Time Since Toggle | State |
-|-------------|---------------|----------------|-------------------|-------|
+| Open Sensor | Closed Sensor | Previous State | Time Since Motion Start | State |
+|-------------|---------------|----------------|-------------------------|-------|
 | ON | ON | - | - | `unavailable` |
 | ON | OFF | - | - | `open` |
 | OFF | ON | - | - | `closed` |
@@ -133,7 +133,13 @@ The integration follows a clear 6-step logic for state determination:
 5. **Previous state was closed + in motion** → `opening`  
 6. **Everything else** → `unavailable`
 
-**Motion Detection**: Uses toggle entity timing within `motion_duration` to detect if the door is currently in motion, supporting any trigger method (Home Assistant, physical buttons, remotes, other automations).
+**Motion Detection**: Tracks when sensors transition from open/closed to both-off (motion start), allowing detection of any trigger method:
+- ✅ **Manual operations**: Physical buttons, remotes, wall switches
+- ✅ **Home Assistant cover commands**: Open, close, stop actions  
+- ✅ **Other automations**: Any system that triggers the garage door
+- ✅ **Fallback timing**: Uses toggle entity timing when motion start time isn't available
+
+This ensures reliable state detection regardless of how the garage door is operated.
 
 ## Usage Examples
 
