@@ -1,31 +1,31 @@
 {
-  "config": {
-    "step": {
-      "user": {
-        "title": "Smart Garage Door",
-        "description": "Configure your garage door with sensors and toggle entity.",
-        "data": {
-          "name": "Garage Door Name",
-          "open_sensor": "Open Sensor",
-          "closed_sensor": "Closed Sensor",
-          "toggle_entity": "Toggle Entity (Switch or Light)",
-          "opening_duration": "Opening Duration"
+    "config": {
+        "step": {
+            "user": {
+                "title": "Smart Garage Door",
+                "description": "Configure your garage door with sensors and toggle entity.",
+                "data": {
+                    "name": "Garage Door Name",
+                    "open_sensor": "Open Sensor",
+                    "closed_sensor": "Closed Sensor",
+                    "toggle_entity": "Toggle Entity (Switch or Light)",
+                    "opening_duration": "Opening Duration"
+                },
+                "data_description": {
+                    "name": "A friendly name for your garage door",
+                    "open_sensor": "Binary sensor that detects when the door is fully open",
+                    "closed_sensor": "Binary sensor that detects when the door is fully closed",
+                    "toggle_entity": "Switch or light entity that controls the garage door opener",
+                    "opening_duration": "Time in seconds to consider the door as 'opening' after toggle"
+                }
+            }
         },
-        "data_description": {
-          "name": "A friendly name for your garage door",
-          "open_sensor": "Binary sensor that detects when the door is fully open",
-          "closed_sensor": "Binary sensor that detects when the door is fully closed",
-          "toggle_entity": "Switch or light entity that controls the garage door opener",
-          "opening_duration": "Time in seconds to consider the door as 'opening' after toggle"
+        "error": {
+            "invalid_toggle_entity": "Toggle entity must be a switch or light entity",
+            "unknown": "Unexpected error occurred"
+        },
+        "abort": {
+            "already_configured": "This garage door is already configured"
         }
-      }
-    },
-    "error": {
-      "invalid_toggle_entity": "Toggle entity must be a switch or light entity",
-      "unknown": "Unexpected error occurred"
-    },
-    "abort": {
-      "already_configured": "This garage door is already configured"
     }
-  }
-} 
+}
