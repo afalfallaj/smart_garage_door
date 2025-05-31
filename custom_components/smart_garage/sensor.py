@@ -86,8 +86,12 @@ class SmartGarageSensor(SensorEntity):
         self._toggle_entity = config[ATTR_TOGGLE_ENTITY]
         self._opening_duration = config.get(ATTR_OPENING_DURATION, 35)
         
-        self._attr_unique_id = f"{DOMAIN}_{self._name.lower().replace(' ', '_')}_state"
+        # Generate consistent entity IDs between sensor and cover
+        entity_id_suffix = self._name.lower().replace(' ', '_')
+        self._attr_unique_id = f"{DOMAIN}_{entity_id_suffix}_state"
         self._attr_name = f"{self._name} State"
+        # Explicitly set entity_id to ensure consistency
+        self.entity_id = f"sensor.{DOMAIN}_{entity_id_suffix}_state"
         self._attr_should_poll = False
         
         # Track entity states
@@ -99,16 +103,19 @@ class SmartGarageSensor(SensorEntity):
         
         _LOGGER.debug(
             "Initialized sensor '%s' with config: open_sensor=%s, closed_sensor=%s, "
-            "toggle_entity=%s, opening_duration=%s, unique_id=%s",
+            "toggle_entity=%s, opening_duration=%s, unique_id=%s, entity_id=%s",
             self._name, self._open_sensor, self._closed_sensor, 
-            self._toggle_entity, self._opening_duration, self._attr_unique_id
+            self._toggle_entity, self._opening_duration, self._attr_unique_id, self.entity_id
         )
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added to hass."""
         await super().async_added_to_hass()
         
-        _LOGGER.debug("Sensor '%s' added to hass, setting up state tracking", self._name)
+        _LOGGER.debug(
+            "Sensor '%s' added to hass with entity_id: %s (expected: %s)", 
+            self._name, self.entity_id, f"sensor.{DOMAIN}_{self._name.lower().replace(' ', '_')}_state"
+        )
         
         # Check if tracked entities exist
         for entity_id in self._entities_to_track:
@@ -139,6 +146,12 @@ class SmartGarageSensor(SensorEntity):
         _LOGGER.debug(
             "Initial state for sensor '%s': value=%s, available=%s",
             self._name, self._attr_native_value, self._attr_available
+        )
+        
+        # Verify the sensor can be found by the cover
+        _LOGGER.debug(
+            "Verifying sensor can be found: %s exists = %s", 
+            self.entity_id, self.hass.states.get(self.entity_id) is not None
         )
 
     @callback

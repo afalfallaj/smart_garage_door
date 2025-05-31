@@ -132,13 +132,41 @@ class SmartGarageCover(CoverEntity):
         
         _LOGGER.debug("Set up state tracking for sensor: %s", self._sensor_entity_id)
         
-        # Initial state update
-        self._update_from_sensor()
+        # Initial state update with retry mechanism
+        await self._delayed_initial_update()
         
         _LOGGER.debug(
             "Initial state for cover '%s': sensor_state=%s, available=%s",
             self._name, self._sensor_state, self._attr_available
         )
+
+    async def _delayed_initial_update(self) -> None:
+        """Initial state update with retry for sensor availability."""
+        import asyncio
+        
+        # Try immediate update first
+        self._update_from_sensor()
+        
+        if self._sensor_state == STATE_UNAVAILABLE:
+            # Wait a bit for sensor to be fully registered and try again
+            _LOGGER.debug("Sensor not found immediately, waiting 1 second and retrying...")
+            await asyncio.sleep(1)
+            self._update_from_sensor()
+            
+            if self._sensor_state == STATE_UNAVAILABLE:
+                # One more try after another second
+                _LOGGER.debug("Sensor still not found, waiting 2 more seconds and retrying...")
+                await asyncio.sleep(2)
+                self._update_from_sensor()
+                
+                if self._sensor_state == STATE_UNAVAILABLE:
+                    _LOGGER.error(
+                        "Sensor '%s' still not found after 3 seconds! "
+                        "Available sensors: %s", 
+                        self._sensor_entity_id,
+                        [entity_id for entity_id in self.hass.states.async_entity_ids() 
+                         if entity_id.startswith('sensor.')][:20]
+                    )
 
     @callback
     def _handle_sensor_state_change(self, event) -> None:
