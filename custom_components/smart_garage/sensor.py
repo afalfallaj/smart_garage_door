@@ -186,13 +186,6 @@ class SmartGarageSensor(SensorEntity):
         closed_sensor_state = self.hass.states.get(self._closed_sensor)
         toggle_entity_state = self.hass.states.get(self._toggle_entity)
 
-        _LOGGER.debug(
-            "Entity states - open_sensor: %s, closed_sensor: %s, toggle_entity: %s",
-            open_sensor_state.state if open_sensor_state else "NOT_FOUND",
-            closed_sensor_state.state if closed_sensor_state else "NOT_FOUND",
-            toggle_entity_state.state if toggle_entity_state else "NOT_FOUND"
-        )
-
         # Check if all required entities exist
         if not open_sensor_state or not closed_sensor_state or not toggle_entity_state:
             missing_entities = []
@@ -234,11 +227,6 @@ class SmartGarageSensor(SensorEntity):
         closed_sensor_on = closed_sensor_state.state == STATE_ON
         both_sensors_off = not open_sensor_on and not closed_sensor_on
 
-        _LOGGER.debug(
-            "Sensor logic for '%s': open_on=%s, closed_on=%s, both_off=%s, previous_state=%s",
-            self._name, open_sensor_on, closed_sensor_on, both_sensors_off, self._previous_state
-        )
-
         # Detect motion start: transition from definite state (open/closed) to both sensors off
         was_in_definite_state = self._previous_state in [STATE_OPEN, STATE_CLOSED]
         motion_just_started = both_sensors_off and was_in_definite_state and not self._motion_start_time
@@ -246,8 +234,8 @@ class SmartGarageSensor(SensorEntity):
         if motion_just_started:
             self._motion_start_time = dt_util.utcnow()
             _LOGGER.debug(
-                "Motion started for '%s': previous_state=%s, motion_start_time=%s",
-                self._name, self._previous_state, self._motion_start_time
+                "Motion started for '%s': previous_state=%s",
+                self._name, self._previous_state
             )
             
             # Schedule motion timeout check (crucial for when sensors don't change)
@@ -308,28 +296,24 @@ class SmartGarageSensor(SensorEntity):
         """
         Check if garage door is in motion based on tracked motion start time.
         """
-        if self._motion_start_time:
-            time_since_motion_start = dt_util.utcnow() - self._motion_start_time
-            seconds_since_motion_start = time_since_motion_start.total_seconds()
-            within_duration = seconds_since_motion_start < self._motion_duration
+        if not self._motion_start_time:
+            return False
             
-            _LOGGER.debug(
-                "Motion check for '%s': seconds_since_motion_start=%.1f, motion_duration=%d, within_duration=%s",
-                self._name, seconds_since_motion_start, self._motion_duration, within_duration
-            )
-            
-            # Clear motion tracking if duration expired
-            if not within_duration:
-                _LOGGER.debug(
-                    "Motion duration expired for '%s', clearing motion tracking",
-                    self._name
-                )
-                self._clear_motion_tracking()
-            
-            return within_duration
+        time_since_motion_start = dt_util.utcnow() - self._motion_start_time
+        seconds_since_motion_start = time_since_motion_start.total_seconds()
+        within_duration = seconds_since_motion_start < self._motion_duration
         
-        # No motion tracking available
-        return False
+        _LOGGER.debug(
+            "Motion check for '%s': %.1fs since start, within_duration=%s",
+            self._name, seconds_since_motion_start, within_duration
+        )
+        
+        # Clear motion tracking if duration expired
+        if not within_duration:
+            _LOGGER.debug("Motion duration expired for '%s'", self._name)
+            self._clear_motion_tracking()
+        
+        return within_duration
 
     def _schedule_motion_timeout(self) -> None:
         """Schedule a callback to check motion timeout after motion_duration seconds."""
@@ -393,3 +377,8 @@ class SmartGarageSensor(SensorEntity):
             attributes["seconds_since_motion_start"] = round(time_since_motion.total_seconds(), 1)
         
         return attributes 
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up when entity is removed."""
+        self._clear_motion_tracking()
+        await super().async_will_remove_from_hass() 
