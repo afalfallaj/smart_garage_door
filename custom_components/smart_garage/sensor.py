@@ -11,7 +11,7 @@ from homeassistant.const import STATE_OFF, STATE_ON, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_point_in_time
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -100,6 +100,9 @@ class SmartGarageSensor(SensorEntity):
         
         # Track motion timing - when motion actually starts (both sensors go off)
         self._motion_start_time = None
+        
+        # Track motion timeout callback to ensure timeout happens even without sensor changes
+        self._motion_timeout_unsub = None
         
         # Track entity states
         self._entities_to_track = [
@@ -246,6 +249,9 @@ class SmartGarageSensor(SensorEntity):
                 "Motion started for '%s': previous_state=%s, motion_start_time=%s",
                 self._name, self._previous_state, self._motion_start_time
             )
+            
+            # Schedule motion timeout check (crucial for when sensors don't change)
+            self._schedule_motion_timeout()
 
         # Apply state logic (clear and concise 6-step logic)
         new_state = self._determine_garage_state(open_sensor_on, closed_sensor_on, both_sensors_off)
@@ -253,7 +259,7 @@ class SmartGarageSensor(SensorEntity):
         # Clear motion tracking only when reaching final states (open/closed)
         # Motion timeout clearing is handled in _is_in_motion()
         if new_state in [STATE_OPEN, STATE_CLOSED]:
-            self._motion_start_time = None
+            self._clear_motion_tracking()
 
         self._attr_native_value = new_state
         
@@ -318,12 +324,48 @@ class SmartGarageSensor(SensorEntity):
                     "Motion duration expired for '%s', clearing motion tracking",
                     self._name
                 )
-                self._motion_start_time = None
+                self._clear_motion_tracking()
             
             return within_duration
         
         # No motion tracking available
         return False
+
+    def _schedule_motion_timeout(self) -> None:
+        """Schedule a callback to check motion timeout after motion_duration seconds."""
+        # Cancel any existing timeout
+        if self._motion_timeout_unsub:
+            self._motion_timeout_unsub()
+            self._motion_timeout_unsub = None
+        
+        # Schedule new timeout check
+        timeout_time = dt_util.utcnow() + timedelta(seconds=self._motion_duration)
+        self._motion_timeout_unsub = async_track_point_in_time(
+            self.hass, self._check_motion_timeout, timeout_time
+        )
+        
+        _LOGGER.debug(
+            "Scheduled motion timeout check for '%s' at %s", 
+            self._name, timeout_time
+        )
+
+    @callback
+    def _check_motion_timeout(self, now) -> None:
+        """Callback to check if motion has timed out."""
+        _LOGGER.debug("Motion timeout callback triggered for '%s'", self._name)
+        
+        # Force a state update to check current conditions
+        self._update_state()
+        self.async_write_ha_state()
+
+    def _clear_motion_tracking(self) -> None:
+        """Clear motion tracking and cancel any scheduled timeout."""
+        self._motion_start_time = None
+        
+        if self._motion_timeout_unsub:
+            self._motion_timeout_unsub()
+            self._motion_timeout_unsub = None
+            _LOGGER.debug("Cancelled motion timeout for '%s'", self._name)
 
     @property
     def device_info(self) -> DeviceInfo:
