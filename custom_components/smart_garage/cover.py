@@ -21,7 +21,7 @@ from .const import (
     ATTR_OPEN_SENSOR,
     ATTR_CLOSED_SENSOR,
     ATTR_TOGGLE_ENTITY,
-    ATTR_OPENING_DURATION,
+    ATTR_MOTION_DURATION,
     STATE_OPENING,
     STATE_CLOSING,
     STATE_CLOSED,
@@ -90,7 +90,7 @@ class SmartGarageCover(CoverEntity):
         self._open_sensor = config[ATTR_OPEN_SENSOR]
         self._closed_sensor = config[ATTR_CLOSED_SENSOR]
         self._toggle_entity = config[ATTR_TOGGLE_ENTITY]
-        self._opening_duration = config.get(ATTR_OPENING_DURATION, 35)
+        self._motion_duration = config.get(ATTR_MOTION_DURATION, 35)
         
         # Determine the domain and service to use for toggling
         self._toggle_domain = self._toggle_entity.split('.')[0] if self._toggle_entity else "switch"
@@ -364,7 +364,7 @@ class SmartGarageCover(CoverEntity):
             ATTR_OPEN_SENSOR: self._open_sensor,
             ATTR_CLOSED_SENSOR: self._closed_sensor,
             ATTR_TOGGLE_ENTITY: self._toggle_entity,
-            ATTR_OPENING_DURATION: self._opening_duration,
+            ATTR_MOTION_DURATION: self._motion_duration,
             "toggle_domain": self._toggle_domain,
             "sensor_entity_id": self._sensor_entity_id,
             "sensor_state": self._sensor_state,

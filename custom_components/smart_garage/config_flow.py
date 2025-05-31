@@ -24,8 +24,8 @@ from .const import (
     ATTR_OPEN_SENSOR,
     ATTR_CLOSED_SENSOR,
     ATTR_TOGGLE_ENTITY,
-    ATTR_OPENING_DURATION,
-    DEFAULT_OPENING_DURATION,
+    ATTR_MOTION_DURATION,
+    DEFAULT_MOTION_DURATION,
     STEP_USER,
 )
 
@@ -88,8 +88,8 @@ class SmartGarageConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 EntitySelectorConfig(domain=TOGGLE_DOMAINS)
             ),
             vol.Optional(
-                ATTR_OPENING_DURATION, 
-                default=DEFAULT_OPENING_DURATION
+                ATTR_MOTION_DURATION, 
+                default=DEFAULT_MOTION_DURATION
             ): NumberSelector(
                 NumberSelectorConfig(
                     mode=NumberSelectorMode.BOX,

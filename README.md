@@ -44,7 +44,7 @@ A Home Assistant custom component that creates smart garage door entities from b
    - Select your open sensor (binary_sensor)
    - Select your closed sensor (binary_sensor)
    - Select your toggle entity (switch or light)
-   - Set the opening duration (default: 35 seconds)
+   - Set the motion duration (default: 35 seconds)
 5. Click **Submit**
 
 Repeat this process for each garage door you want to add.
@@ -61,21 +61,21 @@ smart_garage:
       open_sensor: binary_sensor.main_garage_open
       closed_sensor: binary_sensor.main_garage_closed
       toggle_entity: switch.main_garage_opener
-      opening_duration: 35  # Optional, defaults to 35 seconds
+      motion_duration: 35  # Optional, defaults to 35 seconds
 
     # Using a light entity (common with Shelly devices)
     - name: "Side Garage"
       open_sensor: binary_sensor.side_garage_open_sensor
       closed_sensor: binary_sensor.side_garage_closed_sensor
       toggle_entity: light.shelly_side_garage_relay
-      opening_duration: 45  # Takes 45 seconds to open/close
+      motion_duration: 45  # Takes 45 seconds to open/close
 
     # Shelly device example
     - name: "Basement Garage"
       open_sensor: binary_sensor.shelly_door_sensor_1_input
       closed_sensor: binary_sensor.shelly_door_sensor_2_input  
       toggle_entity: light.shelly_1_channel_1  # Shelly relay exposed as light
-      opening_duration: 40
+      motion_duration: 40
 ```
 
 ### Configuration Variables
@@ -86,7 +86,7 @@ smart_garage:
 | `open_sensor` | Yes | - | Entity ID of the binary sensor that detects when the door is fully open |
 | `closed_sensor` | Yes | - | Entity ID of the binary sensor that detects when the door is fully closed |
 | `toggle_entity` | Yes | - | Entity ID of the switch or light that controls the garage door opener |
-| `opening_duration` | No | 35 | Time in seconds to consider the door as "opening" after toggle |
+| `motion_duration` | No | 35 | Time in seconds to consider the door as "opening" or "closing" after toggle |
 
 ### Supported Toggle Entities
 
@@ -111,25 +111,33 @@ For each configured garage door, the integration creates:
 
 The integration uses the following logic to determine garage door states:
 
-| Open Sensor | Closed Sensor | Previous State | Time Since Toggle | State |
-|-------------|---------------|----------------|-------------------|-------|
+| Open Sensor | Closed Sensor | Previous State | Scenario | State |
+|-------------|---------------|----------------|----------|-------|
 | ON | OFF | - | - | `open` |
 | OFF | ON | - | - | `closed` |
-| OFF | OFF | `open` | < opening_duration | `closing` |
-| OFF | OFF | `closed` | < opening_duration | `opening` |
-| OFF | OFF | - | ≥ opening_duration | `unavailable` |
+| OFF | OFF | `open` | Door closing (any trigger) | `closing` |
+| OFF | OFF | `closed` | Door opening (any trigger) | `opening` |
+| OFF | OFF | `opening` | Door still opening | `opening` |
+| OFF | OFF | `closing` | Door still closing | `closing` |
+| OFF | OFF | `opening`/`closing` | Motion > motion_duration | `unavailable` |
+| OFF | OFF | none | Recent toggle activity | `opening` |
+| OFF | OFF | none | No recent activity | `unavailable` |
 | ON | ON | - | - | `unavailable` |
 | unavailable | - | - | - | `unavailable` |
 | - | unavailable | - | - | `unavailable` |
 
 ### Smart Opening/Closing Detection
 
-The integration intelligently determines whether the door is opening or closing based on the previous state:
+The integration intelligently determines whether the door is opening or closing based on the previous state, **regardless of how the door was triggered**:
 
+- **Manual Triggers Supported**: Works with physical buttons, remote controls, other automations, or any trigger method
 - **Opening**: Door was previously `closed` → now both sensors are `off` → shows `opening`
 - **Closing**: Door was previously `open` → now both sensors are `off` → shows `closing`
+- **Continuous Motion**: If already `opening` or `closing`, continues showing the same state until sensors change
+- **Timeout Protection**: If motion exceeds `motion_duration`, state becomes `unavailable` (door may be stuck)
+- **Integration Triggers**: When triggered through this integration, uses toggle timing as additional validation
 
-This provides accurate status regardless of whether you're opening or closing the door.
+This provides accurate status regardless of whether you use the Home Assistant interface, physical buttons, remotes, or any other trigger method.
 
 ## Usage Examples
 
@@ -208,7 +216,7 @@ smart_garage:
       open_sensor: binary_sensor.shelly_door_sensor_open
       closed_sensor: binary_sensor.shelly_door_sensor_closed
       toggle_entity: light.shelly_1_channel_1  # Shelly relay as light
-      opening_duration: 35
+      motion_duration: 35
 ```
 
 ## Safety Features
@@ -271,7 +279,7 @@ When covers show as "unavailable", look for these key log messages:
 
 3. **State stuck on "opening"**: Check if toggle entity ID is correct and state changes are detected
    - Look for toggle entity state changes in debug logs
-   - Verify opening_duration setting is appropriate
+   - Verify motion_duration setting is appropriate
 
 4. **Toggle not working**: Verify the toggle entity domain (switch or light) is supported
    - Check logs for "Failed to call [domain].toggle for [entity]"
