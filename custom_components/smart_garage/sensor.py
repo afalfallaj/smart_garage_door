@@ -238,96 +238,38 @@ class SmartGarageSensor(SensorEntity):
         closed_sensor_on = closed_sensor_state.state == STATE_ON
         both_sensors_off = not open_sensor_on and not closed_sensor_on
 
-        # Enhanced motion detection logic to handle noisy sensors
-        # Motion can start in several ways:
-        # 1. Transition from definite state (open/closed) to both sensors off (normal case)
-        # 2. Sensor noise during stable state (e.g., closed sensor briefly goes on->off during opening)
+        # Detect motion start: transition from definite state (open/closed) to both sensors off
         was_in_definite_state = self._previous_state in [STATE_OPEN, STATE_CLOSED]
-        currently_in_definite_state = open_sensor_on or closed_sensor_on
-        motion_already_active = self._motion_start_time is not None
+        motion_just_started = both_sensors_off and was_in_definite_state and not self._motion_start_time
         
-        # Detect motion start conditions
-        motion_start_detected = False
-        
-        # Standard motion detection: transition from definite state to both sensors off
-        if both_sensors_off and was_in_definite_state and not motion_already_active:
-            motion_start_detected = True
-            _LOGGER.debug(
-                "Standard motion start detected for '%s': %s -> both_sensors_off",
-                self._name, self._previous_state
-            )
-        
-        # Enhanced detection for noisy sensors during motion:
-        # If we were in a stable state and now see the opposite sensor briefly activate,
-        # this likely indicates motion has started (e.g., door was closed, now closed sensor flickers)
-        elif not motion_already_active and was_in_definite_state:
-            # Door was closed, but closed sensor is now flickering (on when it should be off during opening)
-            if self._previous_state == STATE_CLOSED and closed_sensor_on:
-                motion_start_detected = True
-                _LOGGER.debug(
-                    "Noisy sensor motion start detected for '%s': door was closed, closed sensor flickering",
-                    self._name
-                )
-            # Door was open, but open sensor is now flickering (on when it should be off during closing)  
-            elif self._previous_state == STATE_OPEN and open_sensor_on:
-                motion_start_detected = True
-                _LOGGER.debug(
-                    "Noisy sensor motion start detected for '%s': door was open, open sensor flickering",
-                    self._name
-                )
-        
-        # Start motion tracking if detected
-        if motion_start_detected:
+        if motion_just_started:
             self._motion_start_time = dt_util.utcnow()
-            _LOGGER.info(
-                "Motion started for '%s': previous_state=%s, sensors=(open=%s, closed=%s)",
-                self._name, self._previous_state, open_sensor_on, closed_sensor_on
+            _LOGGER.debug(
+                "Motion started for '%s': previous_state=%s",
+                self._name, self._previous_state
             )
             
             # Schedule motion timeout check (crucial for when sensors don't change)
             self._schedule_motion_timeout()
 
-        # Apply state logic with enhanced motion handling
+        # Apply state logic (clear and concise 6-step logic)
         new_state = self._determine_garage_state(open_sensor_on, closed_sensor_on, both_sensors_off)
         
-        # Enhanced motion clearing logic:
-        # Clear motion tracking when reaching final states (open/closed) OR when sensors give definitive readings
+        # Clear motion tracking only when reaching final states (open/closed)
+        # Motion timeout clearing is handled in _is_in_motion()
         if new_state in [STATE_OPEN, STATE_CLOSED]:
-            if self._motion_start_time:
-                motion_duration = dt_util.utcnow() - self._motion_start_time
-                _LOGGER.info(
-                    "Motion completed for '%s': %s -> %s (duration: %.1fs)",
-                    self._name, self._previous_state, new_state, motion_duration.total_seconds()
-                )
             self._clear_motion_tracking()
-        
-        # If we're in motion and get a definitive sensor reading that matches expected end state,
-        # immediately end motion even if duration hasn't expired
-        elif self._motion_start_time and new_state in [STATE_OPEN, STATE_CLOSED]:
-            expected_end_state = None
-            if self._previous_state == STATE_CLOSED:
-                expected_end_state = STATE_OPEN
-            elif self._previous_state == STATE_OPEN:
-                expected_end_state = STATE_CLOSED
-                
-            if new_state == expected_end_state:
-                motion_duration = dt_util.utcnow() - self._motion_start_time
-                _LOGGER.info(
-                    "Motion completed early for '%s': definitive sensor reading %s (duration: %.1fs)",
-                    self._name, new_state, motion_duration.total_seconds()
-                )
-                self._clear_motion_tracking()
 
         self._attr_native_value = new_state
         
         _LOGGER.debug(
-            "Sensor '%s' final state: %s (in_motion=%s)", 
-            self._name, new_state, self._motion_start_time is not None
+            "Sensor '%s' determined state: %s", 
+            self._name, new_state
         )
 
     def _determine_garage_state(self, open_sensor_on: bool, closed_sensor_on: bool, both_sensors_off: bool) -> str:
         """
-        Determine garage door state using logic that ignores sensor noise during motion.
+        Determine garage door state using clear logic with improved handling of failed transitions.
         
         Args:
             open_sensor_on: True if open sensor is on
@@ -337,98 +279,60 @@ class SmartGarageSensor(SensorEntity):
         Returns:
             The determined state string
         """
-        # During motion, we want to ignore noisy sensor readings and maintain motion state
-        # until we get a definitive sensor reading or motion duration expires
-        in_motion = self._is_in_motion()
-        
-        # 1. Both sensors on - impossible state (sensor malfunction)
+        # 1. Both sensors on - impossible state
         if open_sensor_on and closed_sensor_on:
+            return STATE_UNAVAILABLE
+            
+        # 2. Open sensor on - door is open
+        elif open_sensor_on:
+            return STATE_OPEN
+            
+        # 3. Closed sensor on - door is closed
+        elif closed_sensor_on:
+            return STATE_CLOSED
+            
+        # 4. Both sensors off + previous state was open + in motion = closing
+        elif both_sensors_off and self._previous_state == STATE_OPEN and self._is_in_motion():
+            return STATE_CLOSING
+            
+        # 5. Both sensors off + previous state was closed + in motion = opening
+        elif both_sensors_off and self._previous_state == STATE_CLOSED and self._is_in_motion():
+            return STATE_OPENING
+            
+        # 6. Handle failed transitions: motion expired from transitional states
+        elif both_sensors_off and self._previous_state == STATE_OPENING and not self._is_in_motion():
             _LOGGER.warning(
-                "Both sensors on for '%s' - sensor malfunction detected",
+                "Door '%s' was opening but motion expired without reaching open state - marking unavailable",
                 self._name
             )
             return STATE_UNAVAILABLE
             
-        # 2. Definitive states - always trust clear sensor readings
-        # Open sensor on = door is definitely open
-        elif open_sensor_on:
-            # Special case: if we're in motion from open->closed and open sensor briefly activates,
-            # this is likely sensor noise - ignore it and maintain closing state
-            if in_motion and self._previous_state == STATE_OPEN:
-                _LOGGER.debug(
-                    "In motion closing for '%s': ignoring brief open sensor activation (sensor noise)",
-                    self._name
-                )
-                return STATE_CLOSING
-            # Special case: if we're in motion from closed->open and we see open sensor,
-            # this could be the end of motion - allow it through
-            return STATE_OPEN
-            
-        # Closed sensor on = door is definitely closed  
-        elif closed_sensor_on:
-            # Special case: if we're in motion from closed->open and closed sensor briefly activates,
-            # this is likely sensor noise - ignore it and maintain opening state
-            if in_motion and self._previous_state == STATE_CLOSED:
-                _LOGGER.debug(
-                    "In motion opening for '%s': ignoring brief closed sensor activation (sensor noise)",
-                    self._name
-                )
-                return STATE_OPENING
-            # Special case: if we're in motion from open->closed and we see closed sensor,
-            # this could be the end of motion - allow it through
-            return STATE_CLOSED
-            
-        # 3. Both sensors off - this is where we need to handle motion logic carefully
-        elif both_sensors_off:
-            
-            # If we're currently in motion, maintain the motion state and ignore sensor noise
-            if in_motion:
-                current_motion_state = None
-                if self._previous_state == STATE_OPEN:
-                    current_motion_state = STATE_CLOSING
-                elif self._previous_state == STATE_CLOSED:
-                    current_motion_state = STATE_OPENING
-                
-                if current_motion_state:
-                    _LOGGER.debug(
-                        "In motion for '%s': ignoring sensor noise, maintaining %s state",
-                        self._name, current_motion_state
-                    )
-                    return current_motion_state
-            
-            # Not in motion - handle based on previous state
-            # No previous state (first startup) = assume closed
-            if not self._previous_state:
-                _LOGGER.debug(
-                    "Initial state determination for '%s': both sensors off, assuming closed",
-                    self._name
-                )
-                return STATE_CLOSED
-                
-            # Previous state exists and not in motion = maintain previous definitive state
-            # This handles cases where sensors temporarily go off but door hasn't actually moved
-            elif self._previous_state in [STATE_OPEN, STATE_CLOSED]:
-                _LOGGER.debug(
-                    "Both sensors off for '%s', not in motion, maintaining previous state: %s",
-                    self._name, self._previous_state
-                )
-                return self._previous_state
-                
-            # Previous state was a motion state but motion expired - need to determine final state
-            # This is a fallback case that shouldn't normally happen
-            else:
-                _LOGGER.warning(
-                    "Ambiguous state for '%s': both sensors off, motion expired, previous state was %s",
-                    self._name, self._previous_state
-                )
-                return STATE_UNAVAILABLE
-                
-        # 4. All other cases - truly unavailable
-        else:
+        elif both_sensors_off and self._previous_state == STATE_CLOSING and not self._is_in_motion():
             _LOGGER.warning(
-                "Unexpected sensor combination for '%s': open=%s, closed=%s",
-                self._name, open_sensor_on, closed_sensor_on
+                "Door '%s' was closing but motion expired without reaching closed state - marking unavailable", 
+                self._name
             )
+            return STATE_UNAVAILABLE
+            
+        # 7. Both sensors off + previous stable state + not in motion = keep previous stable state
+        # This handles cases where sensors might temporarily go off but door hasn't moved
+        elif both_sensors_off and self._previous_state in [STATE_OPEN, STATE_CLOSED] and not self._is_in_motion():
+            _LOGGER.debug(
+                "Both sensors off for '%s', maintaining previous stable state: %s",
+                self._name, self._previous_state
+            )
+            return self._previous_state
+            
+        # 8. Currently in transitional state and still in motion = maintain transitional state
+        elif both_sensors_off and self._previous_state in [STATE_OPENING, STATE_CLOSING] and self._is_in_motion():
+            _LOGGER.debug(
+                "Maintaining transitional state '%s' for '%s' (still in motion)",
+                self._previous_state, self._name
+            )
+            return self._previous_state
+            
+        # 9. All other cases - truly unavailable
+        else:
             return STATE_UNAVAILABLE
 
     def _is_in_motion(self) -> bool:
