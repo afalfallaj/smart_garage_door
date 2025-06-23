@@ -10,6 +10,7 @@ ATTR_OPEN_SENSOR = "open_sensor"
 ATTR_CLOSED_SENSOR = "closed_sensor"
 ATTR_TOGGLE_ENTITY = "toggle_entity"
 ATTR_MOTION_DURATION = "motion_duration"
+ATTR_SENSOR_DEBOUNCE_MS = "sensor_debounce_ms"
 
 # States
 STATE_OPENING = "opening"
@@ -28,4 +29,7 @@ TOGGLE_DOMAINS = ["switch", "light"]
 
 # Configuration flow steps
 STEP_USER = "user"
-STEP_GARAGE = "garage" 
+STEP_GARAGE = "garage"
+
+# Default sensor debounce in milliseconds
+DEFAULT_SENSOR_DEBOUNCE_MS = 300 

@@ -20,6 +20,8 @@ from .const import (
     ATTR_CLOSED_SENSOR,
     ATTR_TOGGLE_ENTITY,
     ATTR_MOTION_DURATION,
+    ATTR_SENSOR_DEBOUNCE_MS,
+    DEFAULT_SENSOR_DEBOUNCE_MS,
     STATE_OPENING,
     STATE_CLOSING,
     STATE_CLOSED,
@@ -86,6 +88,8 @@ class SmartGarageSensor(SensorEntity):
         self._closed_sensor = config[ATTR_CLOSED_SENSOR]
         self._toggle_entity = config[ATTR_TOGGLE_ENTITY]
         self._motion_duration = config.get(ATTR_MOTION_DURATION, 35)
+        self._sensor_debounce_ms = config.get(ATTR_SENSOR_DEBOUNCE_MS, DEFAULT_SENSOR_DEBOUNCE_MS)
+        self._debounce_handle = None
         
         # Generate consistent entity IDs between sensor and cover
         entity_id_suffix = self._name.lower().replace(' ', '_')
@@ -171,20 +175,36 @@ class SmartGarageSensor(SensorEntity):
 
     @callback
     def _handle_state_change(self, event) -> None:
-        """Handle state changes of tracked entities."""
+        """Handle state changes of tracked entities with debounce."""
         _LOGGER.debug(
             "State change event for sensor '%s': entity=%s, new_state=%s", 
             self._name, 
             event.data.get("entity_id") if event and event.data else "unknown",
             event.data.get("new_state").state if event and event.data and event.data.get("new_state") else "unknown"
         )
-        
-        self._update_state()
-        self.async_write_ha_state()
-        
+
+        # Debounce: cancel any pending update
+        if self._debounce_handle:
+            self._debounce_handle.cancel()
+            self._debounce_handle = None
+            _LOGGER.debug("Cancelled previous debounce timer for '%s'", self._name)
+
+        # Schedule new update after debounce period
+        def _run_update():
+            self._debounce_handle = None
+            self._update_state()
+            self.async_write_ha_state()
+            _LOGGER.debug(
+                "Debounced update for sensor '%s': value=%s, available=%s",
+                self._name, self._attr_native_value, self._attr_available
+            )
+
+        self._debounce_handle = self.hass.loop.call_later(
+            self._sensor_debounce_ms / 1000.0, _run_update
+        )
         _LOGGER.debug(
-            "Updated sensor '%s' state: value=%s, available=%s",
-            self._name, self._attr_native_value, self._attr_available
+            "Scheduled debounce update for sensor '%s' in %d ms",
+            self._name, self._sensor_debounce_ms
         )
 
     @callback
@@ -424,6 +444,10 @@ class SmartGarageSensor(SensorEntity):
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is removed."""
         self._clear_motion_tracking()
+        # Cancel debounce timer if present
+        if self._debounce_handle:
+            self._debounce_handle.cancel()
+            self._debounce_handle = None
         await super().async_will_remove_from_hass() 
 
     async def _delayed_entity_check(self) -> None:

@@ -26,6 +26,8 @@ from .const import (
     ATTR_TOGGLE_ENTITY,
     ATTR_MOTION_DURATION,
     DEFAULT_MOTION_DURATION,
+    ATTR_SENSOR_DEBOUNCE_MS,
+    DEFAULT_SENSOR_DEBOUNCE_MS,
     STEP_USER,
 )
 
@@ -96,6 +98,17 @@ class SmartGarageConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     min=5,
                     max=120,
                     unit_of_measurement="seconds",
+                )
+            ),
+            vol.Optional(
+                ATTR_SENSOR_DEBOUNCE_MS,
+                default=DEFAULT_SENSOR_DEBOUNCE_MS
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    mode=NumberSelectorMode.BOX,
+                    min=50,
+                    max=2000,
+                    unit_of_measurement="ms",
                 )
             ),
         })
